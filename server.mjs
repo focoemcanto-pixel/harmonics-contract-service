@@ -27,6 +27,17 @@ const getEnvValue = (...keys) => {
   return '';
 };
 
+const TEMPLATE_ID_ENV_KEYS = [
+  'CONTRACT_TEMPLATE_DOC_ID',
+  'GOOGLE_TEMPLATE_DOC_ID',
+  'TEMPLATE_ID',
+];
+
+const ROOT_FOLDER_ENV_KEYS = [
+  'GOOGLE_CONTRACTS_DRIVE_FOLDER_ID',
+  'ROOT_FOLDER_ID',
+];
+
 // Função para verificar as variáveis de ambiente necessárias
 const validateEnv = () => {
   const requiredEnvVars = [
@@ -44,14 +55,29 @@ const validateEnv = () => {
     }
   }
 
-  const templateId = getEnvValue('GOOGLE_TEMPLATE_DOC_ID', 'TEMPLATE_ID');
-  const rootFolderId = getEnvValue('GOOGLE_CONTRACTS_DRIVE_FOLDER_ID', 'ROOT_FOLDER_ID');
+  const templateId = getEnvValue(...TEMPLATE_ID_ENV_KEYS);
+  const rootFolderId = getEnvValue(...ROOT_FOLDER_ENV_KEYS);
 
   if (!templateId || !rootFolderId) {
+    const templateEnvStatus = TEMPLATE_ID_ENV_KEYS.reduce((acc, key) => {
+      acc[key] = Boolean(getEnvValue(key));
+      return acc;
+    }, {});
+
+    const rootFolderEnvStatus = ROOT_FOLDER_ENV_KEYS.reduce((acc, key) => {
+      acc[key] = Boolean(getEnvValue(key));
+      return acc;
+    }, {});
+
+    console.error('[validateEnv] Variáveis de ambiente do Drive ausentes', {
+      templateEnvStatus,
+      rootFolderEnvStatus,
+    });
+
     return {
       valid: false,
       error:
-        'Variáveis de ambiente do Drive ausentes. Defina GOOGLE_TEMPLATE_DOC_ID e GOOGLE_CONTRACTS_DRIVE_FOLDER_ID (ou TEMPLATE_ID e ROOT_FOLDER_ID).',
+        'Variáveis de ambiente do Drive ausentes. Defina CONTRACT_TEMPLATE_DOC_ID (ou GOOGLE_TEMPLATE_DOC_ID/TEMPLATE_ID) e GOOGLE_CONTRACTS_DRIVE_FOLDER_ID (ou ROOT_FOLDER_ID).',
     };
   }
 
