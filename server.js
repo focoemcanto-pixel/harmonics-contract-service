@@ -1,138 +1,108 @@
-require('dotenv').config();
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { generateGoogleContract } from './googleContractGenerator';
 
-const express = require('express');
-const cors = require('cors');
-const { getSupabaseAdmin } = require('./lib/supabase-admin');
-const { buildContractTemplateData } = require('./lib/contracts/buildContractTemplateData');
-const { generateGoogleContract } = require('./lib/contracts/googleContractGenerator');
+// Função para verificar as variáveis de ambiente necessárias
+const validateEnv = () => {
+  const requiredEnvVars = [
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'GOOGLE_OAUTH_CLIENT_ID',
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'GOOGLE_OAUTH_REDIRECT_URI',
+    'GOOGLE_OAUTH_REFRESH_TOKEN',
+  ];
 
-const app = express();
-
-app.use(express.json({ limit: '2mb' }));
-
-app.use(
-  cors({
-    origin: process.env.ALLOWED_ORIGIN || 'https://app.bandaharmonics.com',
-  })
-);
-
-function getReadableErrorMessage(error) {
-  if (!error) return 'Erro interno ao gerar contrato.';
-  if (typeof error === 'string') return error;
-  if (error instanceof Error) return error.message || 'Erro interno ao gerar contrato.';
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return 'Erro interno ao gerar contrato.';
-  }
-}
-
-async function getContractContext({ contractId, precontractId, supabase }) {
-  let contract = null;
-
-  if (contractId) {
-    const { data, error } = await supabase
-      .from('contracts')
-      .select('*')
-      .eq('id', contractId)
-      .single();
-
-    if (error) throw new Error(`Erro ao buscar contract: ${error.message}`);
-    contract = data;
-  } else if (precontractId) {
-    const { data, error } = await supabase
-      .from('contracts')
-      .select('*')
-      .eq('precontract_id', precontractId)
-      .maybeSingle();
-
-    if (error) throw new Error(`Erro ao buscar contract por precontract: ${error.message}`);
-    contract = data || null;
+  for (const envVar of requiredEnvVars) {
+    if (!process.env[envVar]) {
+      return { valid: false, error: `Variável de ambiente ${envVar} não definida` };
+    }
   }
 
-  if (!contract && !precontractId) {
-    throw new Error('Informe contractId ou precontractId.');
-  }
+  return {
+    valid: true,
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    templateId: process.env.GOOGLE_TEMPLATE_DOC_ID,
+    rootFolderId: process.env.GOOGLE_CONTRACTS_DRIVE_FOLDER_ID,
+  };
+};
 
-  const targetPrecontractId = contract?.precontract_id || precontractId || null;
-  if (!targetPrecontractId) throw new Error('PrecontractId não encontrado.');
-
-  const { data: precontract, error: preError } = await supabase
-    .from('precontracts')
+// Função para obter o contexto do contrato
+const getContractContext = async ({ contractId, precontractId, supabase }) => {
+  const { data: contract } = await supabase
+    .from('contracts')
     .select('*')
-    .eq('id', targetPrecontractId)
+    .eq('id', contractId)
     .single();
 
-  if (preError) throw new Error(`Erro ao buscar precontract: ${preError.message}`);
+  const { data: precontract } = await supabase
+    .from('precontracts')
+    .select('*')
+    .eq('id', precontractId)
+    .single();
 
-  let contact = null;
-  const targetContactId = contract?.contact_id || precontract?.contact_id || null;
+  const { data: contact } = await supabase
+    .from('contacts')
+    .select('*')
+    .eq('id', contract?.contact_id || precontract?.contact_id)
+    .single();
 
-  if (targetContactId) {
-    const { data, error } = await supabase
-      .from('contacts')
-      .select('*')
-      .eq('id', targetContactId)
-      .maybeSingle();
-
-    if (error) throw new Error(`Erro ao buscar contact: ${error.message}`);
-    contact = data || null;
-  }
-
-  let event = null;
-  const targetEventId = contract?.event_id || precontract?.event_id || null;
-
-  if (targetEventId) {
-    const { data, error } = await supabase
-      .from('events')
-      .select('*')
-      .eq('id', targetEventId)
-      .maybeSingle();
-
-    if (error) throw new Error(`Erro ao buscar event: ${error.message}`);
-    event = data || null;
-  }
+  const { data: event } = await supabase
+    .from('events')
+    .select('*')
+    .eq('id', contract?.event_id || precontract?.event_id)
+    .single();
 
   return { contract, precontract, contact, event };
-}
+};
 
-function getContractName(context) {
-  const clientName =
-    context.contact?.name ||
-    context.precontract?.client_name ||
-    context.event?.client_name ||
-    'Cliente';
+// Função para gerar dados do template
+const buildContractTemplateData = (context) => {
+  const { contract, precontract, contact, event } = context;
 
-  const eventDate =
-    context.event?.event_date ||
-    context.precontract?.event_date ||
-    new Date().toISOString().slice(0, 10);
+  return {
+    clientName: contact?.name || '',
+    eventDate: event?.event_date || '',
+    eventName: event?.event_name || '',
+    contractValue: contract?.value || precontract?.value || '',
+    // outros campos baseados no contexto...
+  };
+};
 
-  return `Contrato - ${clientName} - ${eventDate}`;
-}
+// Função para gerar nome do contrato
+const getContractName = (context) => {
+  return `${context.contract?.event_name || 'Contrato'} - ${context.contact?.name}`;
+};
 
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'harmonics-contract-service' });
-});
-
-app.post('/generate-contract', async (req, res) => {
+export async function POST(request) {
   try {
-    const supabase = getSupabaseAdmin();
+    const envCheck = validateEnv();
 
-    const contractId = req.body?.contractId || null;
-    const precontractId = req.body?.precontractId || null;
-    const previewOnly = !!req.body?.previewOnly;
-
-    const templateId = process.env.CONTRACT_TEMPLATE_DOC_ID;
-    const rootFolderId = process.env.CONTRACTS_DRIVE_FOLDER_ID;
-
-    if (!templateId) {
-      return res.status(500).json({ ok: false, message: 'CONTRACT_TEMPLATE_DOC_ID não definida.' });
+    if (!envCheck.valid) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: envCheck.error,
+        },
+        { status: 500 }
+      );
     }
 
-    if (!rootFolderId) {
-      return res.status(500).json({ ok: false, message: 'CONTRACTS_DRIVE_FOLDER_ID não definida.' });
-    }
+    const {
+      supabaseUrl,
+      supabaseServiceRoleKey,
+      templateId,
+      rootFolderId,
+    } = envCheck;
+
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+
+    const body = await request.json();
+
+    const contractId = body?.contractId || null;
+    const precontractId = body?.precontractId || null;
+    const previewOnly = !!body?.previewOnly;
 
     const context = await getContractContext({
       contractId,
@@ -143,11 +113,22 @@ app.post('/generate-contract', async (req, res) => {
     const templateData = buildContractTemplateData(context);
 
     if (previewOnly) {
-      return res.json({
+      return NextResponse.json({
         ok: true,
         mode: 'preview',
+        message: 'Template data gerado com sucesso.',
+        ids: {
+          contractId: context.contract?.id || null,
+          precontractId: context.precontract?.id || null,
+          contactId: context.contact?.id || null,
+          eventId: context.event?.id || null,
+        },
         templateData,
       });
+    }
+
+    if (!context.contract?.id && !context.precontract?.id) {
+      throw new Error('Nenhum contexto válido encontrado para gerar o contrato.');
     }
 
     const contractName = getContractName(context);
@@ -156,13 +137,31 @@ app.post('/generate-contract', async (req, res) => {
       context.precontract?.event_date ||
       new Date().toISOString().slice(0, 10);
 
-    const generated = await generateGoogleContract({
+    console.log('[/api/contracts/generate] iniciando generateGoogleContract', {
+      contractId: context.contract?.id || null,
+      precontractId: context.precontract?.id || null,
       templateId,
       rootFolderId,
-      templateData,
       contractName,
       eventDate,
     });
+
+    let generated;
+
+    try {
+      generated = await generateGoogleContract({
+        templateId,
+        rootFolderId,
+        templateData,
+        contractName,
+        eventDate,
+        placeholderStyle: 'double_curly',
+      });
+    } catch (error) {
+      console.error('Erro dentro de generateGoogleContract:', error);
+      console.error('Erro REAL do GoogleContractGenerator:', error);
+      throw error;
+    }
 
     if (context.contract?.id) {
       const { error: updateError } = await supabase
@@ -179,26 +178,31 @@ app.post('/generate-contract', async (req, res) => {
       }
     }
 
-    return res.json({
+    return NextResponse.json({
       ok: true,
       mode: 'generated',
+      message: 'Contrato gerado com sucesso.',
+      ids: {
+        contractId: context.contract?.id || null,
+        precontractId: context.precontract?.id || null,
+        contactId: context.contact?.id || null,
+        eventId: context.event?.id || null,
+      },
       docUrl: generated.docUrl,
       pdfUrl: generated.pdfUrl,
-      pdfId: generated.pdfId,
-      docId: generated.docId,
       folderYear: generated.folderYear,
       folderMonth: generated.folderMonth,
+      templateData,
     });
   } catch (error) {
-    console.error('[generate-contract] erro:', error);
-    return res.status(500).json({
-      ok: false,
-      message: getReadableErrorMessage(error),
-    });
+    console.error('Erro em /api/contracts/generate:', error);
+    return NextResponse.json(
+      {
+        ok: false,
+        message: error.message,
+        errorType: error?.name || 'UnknownError',
+      },
+      { status: 500 }
+    );
   }
-});
-
-const port = Number(process.env.PORT || 3001);
-app.listen(port, () => {
-  console.log(`Contract service rodando na porta ${port}`);
-});
+}
