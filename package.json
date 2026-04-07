@@ -2,7 +2,7 @@
   "name": "harmonics-contract-service",
   "version": "1.0.0",
   "private": true,
-  "type": "module",  
+  "type": "module", 
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs"
@@ -12,6 +12,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "googleapis": "^144.0.0"
+    "googleapis": "^144.0.0",
+    "next": "^12.0.0" 
   }
 }
