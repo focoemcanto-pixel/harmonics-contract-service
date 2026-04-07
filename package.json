@@ -2,7 +2,7 @@
   "name": "harmonics-contract-service",
   "version": "1.0.0",
   "private": true,
-  "type": "commonjs",
+  "type": "module",  // Mudança para "module" aqui
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
