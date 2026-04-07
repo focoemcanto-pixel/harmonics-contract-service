@@ -1,6 +1,9 @@
-import { NextResponse } from 'next/server'; // Importação correta no estilo ES6
+import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { generateGoogleContract } from './googleContractGenerator';  // Certifique-se de que o caminho está correto
+
+const app = express();
+app.use(express.json());
 
 // Função para verificar as variáveis de ambiente necessárias
 const validateEnv = () => {
@@ -75,18 +78,15 @@ const getContractName = (context) => {
   return `${context.contract?.event_name || 'Contrato'} - ${context.contact?.name}`;
 };
 
-export async function POST(request) {
+app.post('/generate-contract', async (req, res) => {
   try {
     const envCheck = validateEnv();
 
     if (!envCheck.valid) {
-      return NextResponse.json(
-        {
-          ok: false,
-          message: envCheck.error,
-        },
-        { status: 500 }
-      );
+      return res.status(500).json({
+        ok: false,
+        message: envCheck.error,
+      });
     }
 
     const {
@@ -98,7 +98,7 @@ export async function POST(request) {
 
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-    const body = await request.json();
+    const body = req.body;
 
     const contractId = body?.contractId || null;
     const precontractId = body?.precontractId || null;
@@ -113,7 +113,7 @@ export async function POST(request) {
     const templateData = buildContractTemplateData(context);
 
     if (previewOnly) {
-      return NextResponse.json({
+      return res.json({
         ok: true,
         mode: 'preview',
         message: 'Template data gerado com sucesso.',
@@ -178,7 +178,7 @@ export async function POST(request) {
       }
     }
 
-    return NextResponse.json({
+    return res.json({
       ok: true,
       mode: 'generated',
       message: 'Contrato gerado com sucesso.',
@@ -196,13 +196,15 @@ export async function POST(request) {
     });
   } catch (error) {
     console.error('Erro em /api/contracts/generate:', error);
-    return NextResponse.json(
-      {
-        ok: false,
-        message: error.message,
-        errorType: error?.name || 'UnknownError',
-      },
-      { status: 500 }
-    );
+    return res.status(500).json({
+      ok: false,
+      message: error.message,
+      errorType: error?.name || 'UnknownError',
+    });
   }
-}
+});
+
+// Inicia o servidor Express
+app.listen(3001, () => {
+  console.log('Server is running on port 3001');
+});
