@@ -1,6 +1,6 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { generateGoogleContract } from './lib/contracts/googleContractGenerator';  // Caminho ajustado para o arquivo correto
+import { generateGoogleContract } from './lib/contracts/googleContractGenerator.js';  // Caminho ajustado para o arquivo correto
 
 const app = express();
 app.use(express.json());
