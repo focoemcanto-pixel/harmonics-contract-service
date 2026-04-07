@@ -2,10 +2,10 @@
   "name": "harmonics-contract-service",
   "version": "1.0.0",
   "private": true,
-  "type": "module",  // Mudança para "module" aqui
-  "main": "server.js",
+  "type": "module",  // Garantir que o Node.js reconheça como módulo ES6
+  "main": "server.mjs",  // Alterado para o novo arquivo server.mjs
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.mjs"  // Iniciar o servidor com server.mjs
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",
