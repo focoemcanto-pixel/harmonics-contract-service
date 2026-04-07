@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import cors from 'cors';  // Importando o CORS
@@ -15,6 +16,17 @@ app.use(cors(corsOptions));  // Aplicando o middleware CORS
 
 app.use(express.json());  // Para interpretar JSON nas requisições
 
+const getEnvValue = (...keys) => {
+  for (const key of keys) {
+    const value = String(process.env[key] || '').trim().replace(/^"(.*)"$/, '$1').trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return '';
+};
+
 // Função para verificar as variáveis de ambiente necessárias
 const validateEnv = () => {
   const requiredEnvVars = [
@@ -27,17 +39,28 @@ const validateEnv = () => {
   ];
 
   for (const envVar of requiredEnvVars) {
-    if (!process.env[envVar]) {
+    if (!getEnvValue(envVar)) {
       return { valid: false, error: `Variável de ambiente ${envVar} não definida` };
     }
   }
 
+  const templateId = getEnvValue('GOOGLE_TEMPLATE_DOC_ID', 'TEMPLATE_ID');
+  const rootFolderId = getEnvValue('GOOGLE_CONTRACTS_DRIVE_FOLDER_ID', 'ROOT_FOLDER_ID');
+
+  if (!templateId || !rootFolderId) {
+    return {
+      valid: false,
+      error:
+        'Variáveis de ambiente do Drive ausentes. Defina GOOGLE_TEMPLATE_DOC_ID e GOOGLE_CONTRACTS_DRIVE_FOLDER_ID (ou TEMPLATE_ID e ROOT_FOLDER_ID).',
+    };
+  }
+
   return {
     valid: true,
-    supabaseUrl: process.env.SUPABASE_URL,
-    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-    templateId: process.env.GOOGLE_TEMPLATE_DOC_ID,
-    rootFolderId: process.env.GOOGLE_CONTRACTS_DRIVE_FOLDER_ID,
+    supabaseUrl: getEnvValue('SUPABASE_URL'),
+    supabaseServiceRoleKey: getEnvValue('SUPABASE_SERVICE_ROLE_KEY'),
+    templateId,
+    rootFolderId,
   };
 };
 
