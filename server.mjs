@@ -136,6 +136,38 @@ const getContractName = (context) => {
   return `${context.contract?.event_name || 'Contrato'} - ${context.contact?.name}`;
 };
 
+
+app.get('/health/env-check', (req, res) => {
+  const templateEnvStatus = TEMPLATE_ID_ENV_KEYS.reduce((acc, key) => {
+    acc[key] = Boolean(getEnvValue(key));
+    return acc;
+  }, {});
+
+  const rootFolderEnvStatus = ROOT_FOLDER_ENV_KEYS.reduce((acc, key) => {
+    acc[key] = Boolean(getEnvValue(key));
+    return acc;
+  }, {});
+
+  const authEnvStatus = [
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'GOOGLE_OAUTH_CLIENT_ID',
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'GOOGLE_OAUTH_REDIRECT_URI',
+    'GOOGLE_OAUTH_REFRESH_TOKEN',
+  ].reduce((acc, key) => {
+    acc[key] = Boolean(getEnvValue(key));
+    return acc;
+  }, {});
+
+  return res.json({
+    ok: true,
+    templateEnvStatus,
+    rootFolderEnvStatus,
+    authEnvStatus,
+  });
+});
+
 app.post('/generate-contract', async (req, res) => {
   try {
     const envCheck = validateEnv();
