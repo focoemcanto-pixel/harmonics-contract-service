@@ -2,7 +2,7 @@
   "name": "harmonics-contract-service",
   "version": "1.0.0",
   "private": true,
-  "type": "module",  // REMOVE O COMENTÁRIO
+  "type": "module",  
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs"
