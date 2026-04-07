@@ -1,6 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server'; // Importação correta no estilo ES6
 import { createClient } from '@supabase/supabase-js';
-import { generateGoogleContract } from './googleContractGenerator';
+import { generateGoogleContract } from './googleContractGenerator';  // Certifique-se de que o caminho está correto
 
 // Função para verificar as variáveis de ambiente necessárias
 const validateEnv = () => {
