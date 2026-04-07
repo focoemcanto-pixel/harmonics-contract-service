@@ -1,9 +1,19 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { generateGoogleContract } from './lib/contracts/googleContractGenerator.js';  // Caminho ajustado para o arquivo correto
+import cors from 'cors';  // Importando o CORS
+import { generateGoogleContract } from './lib/contracts/googleContractGenerator.js';  // Caminho ajustado
 
 const app = express();
-app.use(express.json());
+
+// Configurando CORS para permitir requisições do frontend
+const corsOptions = {
+  origin: 'https://app.bandaharmonics.com',  // Substitua pelo seu domínio do frontend
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+app.use(cors(corsOptions));  // Aplicando o middleware CORS
+
+app.use(express.json());  // Para interpretar JSON nas requisições
 
 // Função para verificar as variáveis de ambiente necessárias
 const validateEnv = () => {
@@ -69,7 +79,6 @@ const buildContractTemplateData = (context) => {
     eventDate: event?.event_date || '',
     eventName: event?.event_name || '',
     contractValue: contract?.value || precontract?.value || '',
-    // outros campos baseados no contexto...
   };
 };
 
