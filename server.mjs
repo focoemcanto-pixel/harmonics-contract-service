@@ -29,19 +29,6 @@ function maskValue(value) {
 }
 
 function requireApiKey(req, res, next) {
-  if (!CONTRACT_SERVICE_API_KEY) {
-    return next();
-  }
-
-  const incomingApiKey = String(req.headers['x-api-key'] || '').trim();
-
-  if (!incomingApiKey || incomingApiKey !== CONTRACT_SERVICE_API_KEY) {
-    return res.status(401).json({
-      ok: false,
-      message: 'Unauthorized',
-    });
-  }
-
   return next();
 }
 
