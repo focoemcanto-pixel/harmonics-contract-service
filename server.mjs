@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import { generateGoogleContract } from './lib/contracts/googleContractGenerator.js';
+import { fetchRepertoireByToken } from './lib/repertoire/fetchRepertoireByToken.js';
+import { renderPremiumRepertoireHtml } from './lib/repertoire/renderPremiumRepertoireHtml.js';
+import { generatePdfFromHtml } from './lib/repertoire/generatePdfFromHtml.js';
 
 const app = express();
 
@@ -135,6 +138,53 @@ app.post('/api/contracts/generate', requireApiKey, async (req, res) => {
       ok: false,
       message: error?.message || 'Erro ao gerar contrato no Render.',
       errorType: error?.name || 'ContractServiceError',
+    });
+  }
+});
+
+
+app.get('/api/repertoire/pdf/:token', requireApiKey, async (req, res) => {
+  try {
+    const token = String(req.params?.token || '').trim();
+
+    if (!token) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Token do repertório é obrigatório.',
+      });
+    }
+
+    const repertoire = await fetchRepertoireByToken(token);
+
+    if (!repertoire) {
+      return res.status(404).json({
+        ok: false,
+        message: 'Repertório não encontrado para o token informado.',
+      });
+    }
+
+    const html = renderPremiumRepertoireHtml(repertoire);
+    const pdfBuffer = await generatePdfFromHtml(html);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'private, max-age=120');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="repertorio-premium-${token.slice(0, 8)}.pdf"`
+    );
+
+    return res.status(200).send(pdfBuffer);
+  } catch (error) {
+    console.error('[contract-service] erro ao gerar PDF premium de repertório:', {
+      message: error?.message,
+      stack: error?.stack,
+      token: req.params?.token,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao gerar PDF premium do repertório.',
+      errorType: error?.name || 'RepertoirePdfServiceError',
     });
   }
 });
