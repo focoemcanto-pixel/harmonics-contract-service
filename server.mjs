@@ -147,6 +147,11 @@ app.get('/api/repertoire/pdf/:token', requireApiKey, async (req, res) => {
   try {
     const token = String(req.params?.token || '').trim();
 
+    console.log('[contract-service] repertoire pdf request received', {
+      token,
+      tokenPreview: token ? `${token.slice(0, 6)}...${token.slice(-4)}` : null,
+    });
+
     if (!token) {
       return res.status(400).json({
         ok: false,
