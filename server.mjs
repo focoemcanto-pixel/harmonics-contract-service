@@ -186,10 +186,15 @@ app.get('/api/repertoire/pdf/:token', requireApiKey, async (req, res) => {
       token: req.params?.token,
     });
 
+    const browserMissing = error?.code === 'PLAYWRIGHT_BROWSER_MISSING';
+
     return res.status(500).json({
       ok: false,
-      message: error?.message || 'Erro ao gerar PDF premium do repertório.',
+      message: browserMissing
+        ? 'Browser Chromium do Playwright não foi instalado no ambiente de runtime do Render.'
+        : error?.message || 'Erro ao gerar PDF premium do repertório.',
       errorType: error?.name || 'RepertoirePdfServiceError',
+      errorCode: error?.code || null,
     });
   }
 });
