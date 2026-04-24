@@ -34,6 +34,30 @@ function maskValue(value) {
 }
 
 function requireApiKey(req, res, next) {
+  const configuredApiKey = CONTRACT_SERVICE_API_KEY;
+  const isProduction = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+
+  if (!configuredApiKey) {
+    if (!isProduction) {
+      console.warn('[contract-service] requireApiKey bypass ativo (development sem CONTRACT_SERVICE_API_KEY).');
+      return next();
+    }
+
+    return res.status(401).json({
+      ok: false,
+      message: 'API key inválida.',
+    });
+  }
+
+  const incomingApiKey = String(req.headers['x-api-key'] || '').trim();
+
+  if (incomingApiKey !== configuredApiKey) {
+    return res.status(401).json({
+      ok: false,
+      message: 'API key inválida.',
+    });
+  }
+
   return next();
 }
 
@@ -473,7 +497,7 @@ app.post('/api/contracts/generate', requireApiKey, async (req, res) => {
 
 
 
-app.post('/api/contracts/html-to-pdf', requireApiKey, async (req, res) => {
+async function handleContractHtmlToPdf(req, res) {
   try {
     const html = String(req.body?.html ?? '').trim();
     const responseFormat = String(req.body?.responseFormat || 'base64').trim().toLowerCase();
@@ -481,6 +505,12 @@ app.post('/api/contracts/html-to-pdf', requireApiKey, async (req, res) => {
       String(req.body?.fileName || 'contrato-premium.pdf')
         .trim()
         .replace(/[\/:*?"<>|#]/g, '') || 'contrato-premium.pdf';
+
+    console.log('[contract-service] html-to-pdf request received', {
+      htmlLength: html.length,
+      fileName,
+      responseFormat,
+    });
 
     if (!html) {
       return res.status(400).json({
@@ -492,11 +522,12 @@ app.post('/api/contracts/html-to-pdf', requireApiKey, async (req, res) => {
     const premiumHtml = renderPremiumContractHtml(html);
     const pdfBuffer = await generatePdfFromHtml(premiumHtml);
 
-    if (responseFormat === 'binary') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
-      return res.status(200).send(pdfBuffer);
-    }
+    console.log('[contract-service] html-to-pdf success', {
+      htmlLength: html.length,
+      fileName,
+      responseFormat,
+      bytes: pdfBuffer.length,
+    });
 
     return res.status(200).json({
       ok: true,
@@ -517,7 +548,10 @@ app.post('/api/contracts/html-to-pdf', requireApiKey, async (req, res) => {
       errorType: error?.name || 'ContractPdfServiceError',
     });
   }
-});
+}
+
+app.post('/api/contracts/html-to-pdf', requireApiKey, handleContractHtmlToPdf);
+app.post('/html-to-pdf', requireApiKey, handleContractHtmlToPdf);
 
 app.get('/api/repertoire/pdf/:token', requireApiKey, async (req, res) => {
   try {
