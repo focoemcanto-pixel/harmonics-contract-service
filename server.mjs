@@ -5,6 +5,7 @@ import { fetchRepertoireByToken } from './lib/repertoire/fetchRepertoireByToken.
 import { renderPremiumRepertoireHtml } from './lib/repertoire/renderPremiumRepertoireHtml.js';
 import { generatePdfFromHtml } from './lib/repertoire/generatePdfFromHtml.js';
 import { renderPremiumContractHtml } from './lib/contracts/renderPremiumContractHtml.js';
+import { getSupabaseAdminClient } from './lib/repertoire/supabaseAdminClient.js';
 
 const app = express();
 
@@ -34,6 +35,113 @@ function maskValue(value) {
 
 function requireApiKey(req, res, next) {
   return next();
+}
+
+function getSupabaseSafe() {
+  return getSupabaseAdminClient();
+}
+
+function parseCurrency(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toIsoDateOnly(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizePaymentStatus(status) {
+  const valid = new Set(['confirmado', 'pendente', 'em análise']);
+  const normalized = String(status || '').trim().toLowerCase();
+  return valid.has(normalized) ? normalized : null;
+}
+
+function normalizePaymentMethod(method) {
+  const valid = new Set(['pix', 'cartão', 'dinheiro', 'transferência', 'outro']);
+  const normalized = String(method || '').trim().toLowerCase();
+  return valid.has(normalized) ? normalized : null;
+}
+
+function mapFormationToMusicians(formation) {
+  const normalized = String(formation || '').trim().toLowerCase();
+  const formationMap = {
+    solo: 1,
+    duo: 2,
+    trio: 3,
+    quarteto: 4,
+    quinteto: 5,
+  };
+  return formationMap[normalized] || 0;
+}
+
+async function atualizarResumoEvento(eventId) {
+  const supabase = getSupabaseSafe();
+  const numericEventId = Number(eventId);
+  if (!Number.isFinite(numericEventId)) {
+    throw new Error('eventId inválido para atualizar resumo.');
+  }
+
+  const { data: event, error: eventError } = await supabase
+    .from('events')
+    .select(
+      'id,agreed_amount,musician_cost,sound_cost,extra_transport_cost,other_cost'
+    )
+    .eq('id', numericEventId)
+    .single();
+
+  if (eventError) throw eventError;
+
+  const { data: payments, error: paymentsError } = await supabase
+    .from('payments')
+    .select('id,amount,status')
+    .eq('event_id', numericEventId);
+
+  if (paymentsError) throw paymentsError;
+
+  const paidAmount = (payments || [])
+    .filter((payment) => normalizePaymentStatus(payment.status) === 'confirmado')
+    .reduce((acc, payment) => acc + parseCurrency(payment.amount), 0);
+
+  const agreedAmount = parseCurrency(event.agreed_amount);
+  const openAmount = Math.max(agreedAmount - paidAmount, 0);
+
+  const costs =
+    parseCurrency(event.musician_cost) +
+    parseCurrency(event.sound_cost) +
+    parseCurrency(event.extra_transport_cost) +
+    parseCurrency(event.other_cost);
+
+  const netAmount = agreedAmount - costs;
+
+  const paymentStatus =
+    paidAmount <= 0 ? 'pendente' : openAmount <= 0 ? 'quitado' : 'parcial';
+
+  const { error: updateError } = await supabase
+    .from('events')
+    .update({
+      paid_amount: paidAmount,
+      open_amount: openAmount,
+      payment_status: paymentStatus,
+      net_amount: netAmount,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', numericEventId);
+
+  if (updateError) throw updateError;
+
+  return {
+    eventId: numericEventId,
+    agreedAmount,
+    paidAmount,
+    openAmount,
+    costs,
+    netAmount,
+    paymentStatus,
+  };
 }
 
 function validateGeneratePayload(body) {
@@ -81,6 +189,226 @@ app.get('/health', (_req, res) => {
       port: PORT,
     },
   });
+});
+
+app.delete('/api/automation-logs', requireApiKey, async (req, res) => {
+  try {
+    const supabase = getSupabaseSafe();
+    const { ids, olderThanDays, status } = req.body || {};
+    let query = supabase.from('automation_logs').delete().select('id');
+
+    if (Array.isArray(ids) && ids.length > 0) {
+      query = query.in('id', ids.map((id) => Number(id)).filter(Number.isFinite));
+    } else {
+      const days = Number(olderThanDays);
+      if (Number.isFinite(days) && days > 0) {
+        const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        query = query.lt('created_at', cutoff);
+      }
+
+      const normalizedStatus = String(status || '').trim().toLowerCase();
+      if (normalizedStatus === 'falhas') query = query.eq('status', 'failed');
+      if (normalizedStatus === 'enviados') query = query.eq('status', 'sent');
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return res.status(200).json({
+      ok: true,
+      affectedCount: Array.isArray(data) ? data.length : 0,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao excluir logs de automação.',
+    });
+  }
+});
+
+app.post('/api/payments/manual', requireApiKey, async (req, res) => {
+  try {
+    const supabase = getSupabaseSafe();
+    const eventId = Number(req.body?.event_id);
+    const amount = parseCurrency(req.body?.amount, NaN);
+    const paymentDate = toIsoDateOnly(req.body?.payment_date);
+    const paymentMethod = normalizePaymentMethod(req.body?.payment_method);
+    const status = normalizePaymentStatus(req.body?.status);
+    const notes = String(req.body?.notes || '').trim() || null;
+    const receiptUrl = String(req.body?.receipt_url || '').trim() || null;
+    const clientName = String(req.body?.client_name || '').trim() || null;
+
+    if (!Number.isFinite(eventId)) {
+      return res.status(400).json({ ok: false, message: 'event_id é obrigatório.' });
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ ok: false, message: 'amount deve ser maior que 0.' });
+    }
+    if (!paymentDate) {
+      return res.status(400).json({ ok: false, message: 'payment_date inválida.' });
+    }
+    if (!paymentMethod) {
+      return res.status(400).json({ ok: false, message: 'payment_method inválido.' });
+    }
+    if (!status) {
+      return res.status(400).json({ ok: false, message: 'status inválido.' });
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('payments')
+      .insert({
+        event_id: eventId,
+        amount,
+        payment_date: paymentDate,
+        payment_method: paymentMethod,
+        status,
+        notes,
+        receipt_url: receiptUrl,
+        client_name: clientName,
+        source: 'manual',
+      })
+      .select('*')
+      .single();
+
+    if (insertError) throw insertError;
+
+    const resumo = await atualizarResumoEvento(eventId);
+
+    return res.status(201).json({
+      ok: true,
+      payment: inserted,
+      eventSummary: resumo,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao inserir pagamento manual.',
+    });
+  }
+});
+
+app.get('/api/finance/cost-defaults', requireApiKey, async (_req, res) => {
+  try {
+    const supabase = getSupabaseSafe();
+    const { data, error } = await supabase
+      .from('finance_cost_defaults')
+      .select('*')
+      .eq('slug', 'default')
+      .single();
+
+    if (error && error.code !== 'PGRST116') throw error;
+
+    return res.status(200).json({
+      ok: true,
+      defaults:
+        data || {
+          slug: 'default',
+          musician_unit_cost: 0,
+          sound_default_cost: 0,
+          transport_default_cost: 0,
+          other_default_cost: 0,
+          notes: null,
+        },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao buscar custos padrão.',
+    });
+  }
+});
+
+app.put('/api/finance/cost-defaults', requireApiKey, async (req, res) => {
+  try {
+    const supabase = getSupabaseSafe();
+    const payload = {
+      slug: 'default',
+      musician_unit_cost: parseCurrency(req.body?.musician_unit_cost),
+      sound_default_cost: parseCurrency(req.body?.sound_default_cost),
+      transport_default_cost: parseCurrency(req.body?.transport_default_cost),
+      other_default_cost: parseCurrency(req.body?.other_default_cost),
+      notes: String(req.body?.notes || '').trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('finance_cost_defaults')
+      .upsert(payload, { onConflict: 'slug' })
+      .select('*')
+      .single();
+
+    if (error) throw error;
+
+    return res.status(200).json({
+      ok: true,
+      defaults: data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao salvar custos padrão.',
+    });
+  }
+});
+
+app.post('/api/events/:id/apply-default-costs', requireApiKey, async (req, res) => {
+  try {
+    const supabase = getSupabaseSafe();
+    const eventId = Number(req.params?.id);
+    if (!Number.isFinite(eventId)) {
+      return res.status(400).json({ ok: false, message: 'id do evento inválido.' });
+    }
+
+    const { data: event, error: eventError } = await supabase
+      .from('events')
+      .select('id,formation,has_sound,has_transport,transport_price')
+      .eq('id', eventId)
+      .single();
+
+    if (eventError) throw eventError;
+
+    const { data: defaults, error: defaultsError } = await supabase
+      .from('finance_cost_defaults')
+      .select('*')
+      .eq('slug', 'default')
+      .single();
+
+    if (defaultsError) throw defaultsError;
+
+    const musicianCount = mapFormationToMusicians(event.formation);
+    const musicianCost = parseCurrency(defaults.musician_unit_cost) * musicianCount;
+    const soundCost = event.has_sound ? parseCurrency(defaults.sound_default_cost) : 0;
+    const hasTransport = Boolean(event.has_transport) || parseCurrency(event.transport_price) > 0;
+    const transportCost = hasTransport ? parseCurrency(defaults.transport_default_cost) : 0;
+    const otherCost = parseCurrency(defaults.other_default_cost);
+
+    const { data: updatedEvent, error: updateError } = await supabase
+      .from('events')
+      .update({
+        musician_cost: musicianCost,
+        sound_cost: soundCost,
+        extra_transport_cost: transportCost,
+        other_cost: otherCost,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', eventId)
+      .select('*')
+      .single();
+
+    if (updateError) throw updateError;
+    const summary = await atualizarResumoEvento(eventId);
+
+    return res.status(200).json({
+      ok: true,
+      event: updatedEvent,
+      eventSummary: summary,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao aplicar custos padrão no evento.',
+    });
+  }
 });
 
 app.post('/api/contracts/generate', requireApiKey, async (req, res) => {
