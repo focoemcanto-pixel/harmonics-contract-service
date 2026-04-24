@@ -4,6 +4,7 @@ import { generateGoogleContract } from './lib/contracts/googleContractGenerator.
 import { fetchRepertoireByToken } from './lib/repertoire/fetchRepertoireByToken.js';
 import { renderPremiumRepertoireHtml } from './lib/repertoire/renderPremiumRepertoireHtml.js';
 import { generatePdfFromHtml } from './lib/repertoire/generatePdfFromHtml.js';
+import { renderPremiumContractHtml } from './lib/contracts/renderPremiumContractHtml.js';
 
 const app = express();
 
@@ -142,6 +143,53 @@ app.post('/api/contracts/generate', requireApiKey, async (req, res) => {
   }
 });
 
+
+
+app.post('/api/contracts/html-to-pdf', requireApiKey, async (req, res) => {
+  try {
+    const html = String(req.body?.html ?? '').trim();
+    const responseFormat = String(req.body?.responseFormat || 'base64').trim().toLowerCase();
+    const fileName =
+      String(req.body?.fileName || 'contrato-premium.pdf')
+        .trim()
+        .replace(/[\/:*?"<>|#]/g, '') || 'contrato-premium.pdf';
+
+    if (!html) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Campo html é obrigatório para gerar PDF.',
+      });
+    }
+
+    const premiumHtml = renderPremiumContractHtml(html);
+    const pdfBuffer = await generatePdfFromHtml(premiumHtml);
+
+    if (responseFormat === 'binary') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+      return res.status(200).send(pdfBuffer);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      fileName,
+      mimeType: 'application/pdf',
+      pdfBase64: pdfBuffer.toString('base64'),
+      bytes: pdfBuffer.length,
+    });
+  } catch (error) {
+    console.error('[contract-service] erro ao gerar PDF premium de contrato:', {
+      message: error?.message,
+      stack: error?.stack,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao gerar PDF premium do contrato.',
+      errorType: error?.name || 'ContractPdfServiceError',
+    });
+  }
+});
 
 app.get('/api/repertoire/pdf/:token', requireApiKey, async (req, res) => {
   try {
