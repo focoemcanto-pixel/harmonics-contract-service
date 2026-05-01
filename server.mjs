@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
 import { generateGoogleContract } from './lib/contracts/googleContractGenerator.js';
 import { fetchRepertoireByToken } from './lib/repertoire/fetchRepertoireByToken.js';
 import { renderPremiumRepertoireHtml } from './lib/repertoire/renderPremiumRepertoireHtml.js';
@@ -25,6 +27,29 @@ app.use(
 );
 
 app.use(express.json({ limit: '10mb' }));
+const MAX_PDF_UPLOAD_BYTES = 15 * 1024 * 1024;
+const pdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_PDF_UPLOAD_BYTES },
+});
+
+function uploadPdfSingle(req, res, next) {
+  return pdfUpload.single('file')(req, res, (error) => {
+    if (!error) return next();
+
+    if (error?.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        ok: false,
+        message: 'Arquivo inválido. Tamanho máximo permitido: 15MB.',
+      });
+    }
+
+    return res.status(400).json({
+      ok: false,
+      message: error?.message || 'Falha ao processar upload do PDF.',
+    });
+  });
+}
 
 function maskValue(value) {
   const raw = String(value || '').trim();
@@ -552,6 +577,75 @@ async function handleContractHtmlToPdf(req, res) {
 
 app.post('/api/contracts/html-to-pdf', requireApiKey, handleContractHtmlToPdf);
 app.post('/html-to-pdf', requireApiKey, handleContractHtmlToPdf);
+
+async function handleExtractPdfText(req, res) {
+  try {
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Arquivo PDF é obrigatório no campo "file".',
+      });
+    }
+
+    if (file.mimetype !== 'application/pdf') {
+      return res.status(400).json({
+        ok: false,
+        message: 'Arquivo inválido. Envie um PDF com mimetype application/pdf.',
+      });
+    }
+
+    if (!Number.isFinite(file.size) || file.size <= 0 || file.size > MAX_PDF_UPLOAD_BYTES) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Arquivo inválido. Tamanho máximo permitido: 15MB.',
+      });
+    }
+
+    const data = await pdfParse(file.buffer);
+    const text = String(data?.text || '');
+    const textLength = text.length;
+    const pages = Number(data?.numpages) || 0;
+
+    console.log('[contract-service] extract-pdf-text success', {
+      fileName: file.originalname,
+      fileSize: file.size,
+      textLength,
+      pages,
+      textSample: text.slice(0, 300),
+    });
+
+    if (!text.trim()) {
+      return res.status(422).json({
+        ok: false,
+        message: 'Não foi possível extrair texto do PDF. O arquivo pode ser escaneado/imagem.',
+        textLength: 0,
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      text,
+      textLength,
+      pages,
+    });
+  } catch (error) {
+    console.error('[contract-service] erro ao extrair texto de PDF:', {
+      message: error?.message,
+      stack: error?.stack,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      message: error?.message || 'Erro ao extrair texto do PDF.',
+      errorType: error?.name || 'PdfTextExtractionError',
+    });
+  }
+}
+
+app.post('/api/contracts/extract-pdf-text', requireApiKey, uploadPdfSingle, handleExtractPdfText);
+app.post('/extract-pdf-text', requireApiKey, uploadPdfSingle, handleExtractPdfText);
 
 app.get('/api/repertoire/pdf/:token', requireApiKey, async (req, res) => {
   try {
