@@ -4,7 +4,7 @@ import multer from 'multer';
 import pdfParse from 'pdf-parse';
 import { generateGoogleContract } from './lib/contracts/googleContractGenerator.js';
 import { fetchRepertoireByToken } from './lib/repertoire/fetchRepertoireByToken.js';
-import { renderPremiumRepertoireHtml } from './lib/repertoire/renderPremiumRepertoireHtml.js';
+import { renderPremiumRepertoireHtml } from './lib/repertoire/renderPremiumRepertoireHtmlFixed.js';
 import { generatePdfFromHtml } from './lib/repertoire/generatePdfFromHtml.js';
 import { renderPremiumContractHtml } from './lib/contracts/renderPremiumContractHtml.js';
 import { getSupabaseAdminClient } from './lib/repertoire/supabaseAdminClient.js';
@@ -275,98 +275,6 @@ app.delete('/api/automation-logs', requireApiKey, async (req, res) => {
   }
 });
 
-app.post('/api/payments/manual', requireApiKey, async (req, res) => {
-  try {
-    const supabase = getSupabaseSafe();
-    const eventId = Number(req.body?.event_id);
-    const amount = parseCurrency(req.body?.amount, NaN);
-    const paymentDate = toIsoDateOnly(req.body?.payment_date);
-    const paymentMethod = normalizePaymentMethod(req.body?.payment_method);
-    const status = normalizePaymentStatus(req.body?.status);
-    const notes = String(req.body?.notes || '').trim() || null;
-    const receiptUrl = String(req.body?.receipt_url || '').trim() || null;
-    const clientName = String(req.body?.client_name || '').trim() || null;
-
-    if (!Number.isFinite(eventId)) {
-      return res.status(400).json({ ok: false, message: 'event_id é obrigatório.' });
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return res.status(400).json({ ok: false, message: 'amount deve ser maior que 0.' });
-    }
-    if (!paymentDate) {
-      return res.status(400).json({ ok: false, message: 'payment_date inválida.' });
-    }
-    if (!paymentMethod) {
-      return res.status(400).json({ ok: false, message: 'payment_method inválido.' });
-    }
-    if (!status) {
-      return res.status(400).json({ ok: false, message: 'status inválido.' });
-    }
-
-    const { data: inserted, error: insertError } = await supabase
-      .from('payments')
-      .insert({
-        event_id: eventId,
-        amount,
-        payment_date: paymentDate,
-        payment_method: paymentMethod,
-        status,
-        notes,
-        receipt_url: receiptUrl,
-        client_name: clientName,
-        source: 'manual',
-      })
-      .select('*')
-      .single();
-
-    if (insertError) throw insertError;
-
-    const resumo = await atualizarResumoEvento(eventId);
-
-    return res.status(201).json({
-      ok: true,
-      payment: inserted,
-      eventSummary: resumo,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      message: error?.message || 'Erro ao inserir pagamento manual.',
-    });
-  }
-});
-
-app.get('/api/finance/cost-defaults', requireApiKey, async (_req, res) => {
-  try {
-    const supabase = getSupabaseSafe();
-    const { data, error } = await supabase
-      .from('finance_cost_defaults')
-      .select('*')
-      .eq('slug', 'default')
-      .single();
-
-    if (error && error.code !== 'PGRST116') throw error;
-
-    return res.status(200).json({
-      ok: true,
-      defaults:
-        data || {
-          slug: 'default',
-          musician_unit_cost: 0,
-          sound_default_cost: 0,
-          transport_default_cost: 0,
-          other_default_cost: 0,
-          notes: null,
-        },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      message: error?.message || 'Erro ao buscar custos padrão.',
-    });
-  }
-});
-
 app.put('/api/finance/cost-defaults', requireApiKey, async (req, res) => {
   try {
     const supabase = getSupabaseSafe();
@@ -396,66 +304,6 @@ app.put('/api/finance/cost-defaults', requireApiKey, async (req, res) => {
     return res.status(500).json({
       ok: false,
       message: error?.message || 'Erro ao salvar custos padrão.',
-    });
-  }
-});
-
-app.post('/api/events/:id/apply-default-costs', requireApiKey, async (req, res) => {
-  try {
-    const supabase = getSupabaseSafe();
-    const eventId = Number(req.params?.id);
-    if (!Number.isFinite(eventId)) {
-      return res.status(400).json({ ok: false, message: 'id do evento inválido.' });
-    }
-
-    const { data: event, error: eventError } = await supabase
-      .from('events')
-      .select('id,formation,has_sound,has_transport,transport_price')
-      .eq('id', eventId)
-      .single();
-
-    if (eventError) throw eventError;
-
-    const { data: defaults, error: defaultsError } = await supabase
-      .from('finance_cost_defaults')
-      .select('*')
-      .eq('slug', 'default')
-      .single();
-
-    if (defaultsError) throw defaultsError;
-
-    const musicianCount = mapFormationToMusicians(event.formation);
-    const musicianCost = parseCurrency(defaults.musician_unit_cost) * musicianCount;
-    const soundCost = event.has_sound ? parseCurrency(defaults.sound_default_cost) : 0;
-    const hasTransport = Boolean(event.has_transport) || parseCurrency(event.transport_price) > 0;
-    const transportCost = hasTransport ? parseCurrency(defaults.transport_default_cost) : 0;
-    const otherCost = parseCurrency(defaults.other_default_cost);
-
-    const { data: updatedEvent, error: updateError } = await supabase
-      .from('events')
-      .update({
-        musician_cost: musicianCost,
-        sound_cost: soundCost,
-        extra_transport_cost: transportCost,
-        other_cost: otherCost,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', eventId)
-      .select('*')
-      .single();
-
-    if (updateError) throw updateError;
-    const summary = await atualizarResumoEvento(eventId);
-
-    return res.status(200).json({
-      ok: true,
-      event: updatedEvent,
-      eventSummary: summary,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      message: error?.message || 'Erro ao aplicar custos padrão no evento.',
     });
   }
 });
@@ -520,8 +368,6 @@ app.post('/api/contracts/generate', requireApiKey, async (req, res) => {
   }
 });
 
-
-
 async function handleContractHtmlToPdf(req, res) {
   try {
     const html = String(req.body?.html ?? '').trim();
@@ -577,75 +423,6 @@ async function handleContractHtmlToPdf(req, res) {
 
 app.post('/api/contracts/html-to-pdf', requireApiKey, handleContractHtmlToPdf);
 app.post('/html-to-pdf', requireApiKey, handleContractHtmlToPdf);
-
-async function handleExtractPdfText(req, res) {
-  try {
-    const file = req.file;
-
-    if (!file) {
-      return res.status(400).json({
-        ok: false,
-        message: 'Arquivo PDF é obrigatório no campo "file".',
-      });
-    }
-
-    if (file.mimetype !== 'application/pdf') {
-      return res.status(400).json({
-        ok: false,
-        message: 'Arquivo inválido. Envie um PDF com mimetype application/pdf.',
-      });
-    }
-
-    if (!Number.isFinite(file.size) || file.size <= 0 || file.size > MAX_PDF_UPLOAD_BYTES) {
-      return res.status(400).json({
-        ok: false,
-        message: 'Arquivo inválido. Tamanho máximo permitido: 15MB.',
-      });
-    }
-
-    const data = await pdfParse(file.buffer);
-    const text = String(data?.text || '');
-    const textLength = text.length;
-    const pages = Number(data?.numpages) || 0;
-
-    console.log('[contract-service] extract-pdf-text success', {
-      fileName: file.originalname,
-      fileSize: file.size,
-      textLength,
-      pages,
-      textSample: text.slice(0, 300),
-    });
-
-    if (!text.trim()) {
-      return res.status(422).json({
-        ok: false,
-        message: 'Não foi possível extrair texto do PDF. O arquivo pode ser escaneado/imagem.',
-        textLength: 0,
-      });
-    }
-
-    return res.status(200).json({
-      ok: true,
-      text,
-      textLength,
-      pages,
-    });
-  } catch (error) {
-    console.error('[contract-service] erro ao extrair texto de PDF:', {
-      message: error?.message,
-      stack: error?.stack,
-    });
-
-    return res.status(500).json({
-      ok: false,
-      message: error?.message || 'Erro ao extrair texto do PDF.',
-      errorType: error?.name || 'PdfTextExtractionError',
-    });
-  }
-}
-
-app.post('/api/contracts/extract-pdf-text', requireApiKey, uploadPdfSingle, handleExtractPdfText);
-app.post('/extract-pdf-text', requireApiKey, uploadPdfSingle, handleExtractPdfText);
 
 app.get('/api/repertoire/pdf/:token', requireApiKey, async (req, res) => {
   try {
