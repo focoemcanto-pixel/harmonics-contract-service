@@ -308,6 +308,24 @@ app.put('/api/finance/cost-defaults', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/api/contracts/extract-pdf-text', requireApiKey, uploadPdfSingle, async (req, res) => {
+  const buffer = req.file?.buffer;
+  if (!buffer?.length || !buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
+    return res.status(400).json({ ok: false, message: 'Selecione um arquivo PDF válido.' });
+  }
+
+  try {
+    const result = await pdfParse(new Uint8Array(buffer));
+    const text = String(result.text || '').trim();
+    if (!text) {
+      return res.status(422).json({ ok: false, message: 'O PDF não contém texto selecionável. Preencha os dados manualmente.' });
+    }
+    return res.json({ ok: true, text, pages: result.numpages });
+  } catch {
+    return res.status(422).json({ ok: false, message: 'Não foi possível ler o PDF. Verifique se o arquivo está íntegro e sem senha.' });
+  }
+});
+
 app.post('/api/contracts/generate', requireApiKey, async (req, res) => {
   try {
     const validation = validateGeneratePayload(req.body);
